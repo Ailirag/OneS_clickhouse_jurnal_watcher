@@ -1,0 +1,23 @@
+{
+    "cluster_base_name": "ERP_26",
+    "backup_path": "\\\\10.100.99.99\\BKP-LOG-Rep\\1CLogs\\ERP",
+    "clickhouse": {
+        "url": "http://path_to_server:8123",
+        "user": "default",
+        "password": "",
+        "database_name": "v8logs",
+        "deep_of_history": 20
+    },
+    "telegram": {
+        "bot_token": "",
+        "chat_id": ""
+    },
+    "service": {
+        "name": "EventLogExporter",
+        "data_waiting_time_sec": 60,
+        "count_restart_service": 5
+    },
+    "removal_conditions": [
+		"Metadata = '' and (Event = 'Транзакция.Начало' or Event = 'Транзакция.Фиксация')"
+	]
+}
