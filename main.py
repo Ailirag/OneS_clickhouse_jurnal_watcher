@@ -171,7 +171,7 @@ def archiving_data_update():
         return
 
     data = clickhouse_query(f'''select toStartOfDay(DateTime) as DateTime from {settingsv2.clickhouse.database_name}.EventLogItems
-                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset}))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset})))
                             limit 1
                             FORMAT JSON''')
     if data.status_code == 200:
@@ -183,7 +183,7 @@ def archiving_data_update():
             clearing_date = datetime(1999, 12, 31)
 
         data = clickhouse_query(f'''select toStartOfDay(DateTime) as DateTime from {settingsv2.clickhouse.database_name}.HistoryChangesEventLog
-                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset}))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset})))
                             limit 1
                             FORMAT JSON''')
 
@@ -208,11 +208,11 @@ def archiving_data_update():
                                 LEFT JOIN ( SELECT distinct
                                             User, Data
                                             FROM {settingsv2.clickhouse.database_name}.EventLogItems
-                                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -2, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()))) 
+                                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -2, toStartOfDay(now()+{settingsv2.clickhouse.time_offset}))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset}))) 
                                             AND Event = 'Сеанс.Аутентификация' AND notEmpty(Data) = 1 ) AS Data_AD
                                 ON EventLogItems.User = Data_AD.User
                                  WHERE Event = 'Данные.Изменение'
-                                 AND notEmpty({settingsv2.clickhouse.database_name}.DataPresentation) = 1 AND {settingsv2.clickhouse.database_name}.DateTime  BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                                 AND notEmpty({settingsv2.clickhouse.database_name}.DataPresentation) = 1 AND {settingsv2.clickhouse.database_name}.DateTime  BETWEEN date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset}))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()+{settingsv2.clickhouse.time_offset})))
                                 ) AS DataForDay''')
 
             if result.status_code != 200:
