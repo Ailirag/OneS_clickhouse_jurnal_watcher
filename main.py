@@ -1,8 +1,10 @@
+import json
 import re
 import subprocess
 import sys
 import os
 import time
+import traceback
 
 from secure_json import Settings as Settingsv2
 import requests
@@ -144,6 +146,83 @@ def archiving_v8logs(file_name, path_to_v8logs):
         logging(f'Action failed with an error: {error_exc}')
 
 
+def archiving_data_update():
+    result = clickhouse_query(f'''CREATE TABLE IF NOT EXISTS {settingsv2.clickhouse.database_name}.HistoryChangesEventLog
+                (
+                    Id Int64 Codec(DoubleDelta, LZ4),
+                    DateTime DateTime('UTC') Codec(Delta, LZ4),
+                    User LowCardinality(String),
+                    User_AD LowCardinality(String),
+                    Computer LowCardinality(String),
+                    Application LowCardinality(String),
+                    Connection Int64 Codec(DoubleDelta, LZ4),
+                    Event LowCardinality(String),
+                    Metadata LowCardinality(String),
+                    DataPresentation String Codec(ZSTD),
+                    Session Int64 Codec(DoubleDelta, LZ4)
+                )
+                engine = MergeTree()
+                PARTITION BY (toYYYYMM(DateTime))
+                ORDER BY (DateTime)
+                SETTINGS index_granularity = 8192;''')
+
+    if result.status_code != 200:
+        logging('Creating table HistoryChangesEventLog failed.')
+        return
+
+    data = clickhouse_query(f'''select toStartOfDay(DateTime) as DateTime from {settingsv2.clickhouse.database_name}.EventLogItems
+                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                            limit 1
+                            FORMAT JSON''')
+    if data.status_code == 200:
+        result_json = json.loads(data.text)
+        if result_json['data']:
+            clearing_date = result_json['data'][0]['DateTime']
+            clearing_date = datetime.strptime(clearing_date, '%Y-%m-%d %H:%M:%S')
+        else:
+            clearing_date = datetime(1999, 12, 31)
+
+        data = clickhouse_query(f'''select toStartOfDay(DateTime) as DateTime from {settingsv2.clickhouse.database_name}.HistoryChangesEventLog
+                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                            limit 1
+                            FORMAT JSON''')
+
+        if data.status_code == 200:
+            result_json = json.loads(data.text)
+            if result_json['data']:
+                HistoryDate = result_json['data'][0]['DateTime']
+                HistoryDate = datetime.strptime(HistoryDate, '%Y-%m-%d %H:%M:%S')
+            else:
+                HistoryDate = datetime(1998, 12, 31)
+        else:
+            logging(f'Getting data from {settingsv2.clickhouse.database_name}.HistoryChangesEventLog failed')
+            return
+
+        if clearing_date > HistoryDate:
+            result = clickhouse_query(f'''
+                    INSERT  
+                    INTO {settingsv2.clickhouse.database_name}.HistoryChangesEventLog  
+                    (Id, DateTime, User, Computer, Application, Connection, Event, Metadata, DataPresentation, Session, User_AD) 
+                        SELECT * FROM 
+                            (SELECT Id, DateTime, User, Computer, Application, Connection, Event, Metadata, DataPresentation, Session, Data_AD.Data as User_AD  FROM {settingsv2.clickhouse.database_name}.EventLogItems AS  {settingsv2.clickhouse.database_name}
+                                LEFT JOIN ( SELECT distinct
+                                            User, Data
+                                            FROM {settingsv2.clickhouse.database_name}.EventLogItems
+                                            WHERE toStartOfDay(DateTime) BETWEEN date_add(day, -2, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now()))) 
+                                            AND Event = 'Сеанс.Аутентификация' AND notEmpty(Data) = 1 ) AS Data_AD
+                                ON EventLogItems.User = Data_AD.User
+                                 WHERE Event = 'Данные.Изменение'
+                                 AND notEmpty({settingsv2.clickhouse.database_name}.DataPresentation) = 1 AND {settingsv2.clickhouse.database_name}.DateTime  BETWEEN date_add(day, -1, toStartOfDay(now()))  AND date_add(second, 86399, date_add(day, -1, toStartOfDay(now())))
+                                ) AS DataForDay''')
+
+            if result.status_code != 200:
+                logging('Insert data to HistoryChangesEventLog failed.')
+
+    else:
+        logging(f'Getting data from {settingsv2.clickhouse.database_name}.EventLogItems failed')
+
+
+
 def start_mutations_on_clickhouse(date_border):
     count_days = timedelta(days=settingsv2.clickhouse.deep_of_history)
     cleaning_border = date_border - count_days
@@ -157,6 +236,8 @@ def start_mutations_on_clickhouse(date_border):
         day = f'0{cleaning_border.day}'
     else:
         day = cleaning_border.day
+
+    archiving_data_update()
 
     cleaning_border_str = f'{cleaning_border.year}{month}{day}230000'
     result = clickhouse_query(
@@ -355,6 +436,10 @@ if __name__ == '__main__':
                 logging(f'ERROR. {base_error}.')
                 sys.exit()
 
+        if path_to_v8logs == '':
+            logging('ERROR. Path to v8logs not finded, please check your OneC cluster.')
+            sys.exit()
+
         while True:
 
             date_border, problem = try_to_archive_and_clean(date_border, problem, path_to_v8logs)
@@ -412,5 +497,7 @@ if __name__ == '__main__':
 
     except Exception as e:
         error_exc = str(type(e)) + str(e)
+        logging(error_exc)
+        error_exc = traceback.format_exc()
         logging(error_exc)
 
